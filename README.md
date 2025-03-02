@@ -1,3 +1,10 @@
+# MLB Support
+Support for MLB without flexray.
+Possibly supported:
+- A4 B8 / B8.5
+- A5 8K
+- Q5 8R facelift or hybrid (Pre-facelift needs Electric steering rack (Can be retrofitted))
+
 # Flowpilot stand alone
 This is a fork of Flowpilot without the need of rooting or a Termux environment. Install the apk and you're done. Requires a Snapdragon based Android phone.
 
@@ -10,7 +17,9 @@ Huge shout out to the original [Flowpilot](https://github.com/flowdriveai/flowpi
 
 # Building notes
 Clone:
-* `git clone --single-branch --depth 1 https://github.com/jagheterfredrik/flowpilot.git`
+* `git clone --single-branch --depth 1 https://github.com/Dennis-NL/flowpilot.git`
+* `git checkout -b MLB origin/MLB`
+
 * `cd flowpilot`
 * `git submodule update --init --recursive`
 
