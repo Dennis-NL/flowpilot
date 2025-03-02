@@ -19,9 +19,8 @@ Huge shout out to the original [Flowpilot](https://github.com/flowdriveai/flowpi
 
 # Building notes
 Clone:
-* `git clone --single-branch --depth 1 https://github.com/Dennis-NL/flowpilot.git`
+* `git clone --single-branch --branch MLB --depth 1 https://github.com/Dennis-NL/flowpilot.git`
 * `cd flowpilot`
-* `git checkout -b MLB origin/MLB`
 * `git submodule update --init --recursive`
 
 Setup the environment once:
