@@ -3,15 +3,12 @@
 
 #include "drivers/pwm.h"
 #include "drivers/usb.h"
-#include "drivers/gmlan_alt.h"
-#include "drivers/kline_init.h"
 #include "drivers/simple_watchdog.h"
-#include "drivers/logging.h"
+#include "drivers/bootkick.h"
 
 #include "early_init.h"
 #include "provision.h"
 
-#include "power_saving.h"
 #include "safety.h"
 
 #include "health.h"
@@ -24,6 +21,8 @@
   #include "drivers/bxcan.h"
 #endif
 
+#include "power_saving.h"
+
 #include "obj/gitversion.h"
 
 #include "can_comms.h"
@@ -32,16 +31,15 @@
 
 // ********************* Serial debugging *********************
 
-bool check_started(void) {
+static bool check_started(void) {
   bool started = current_board->check_ignition() || ignition_can;
-  ignition_seen |= started;
   return started;
 }
 
 void debug_ring_callback(uart_ring *ring) {
   char rcv;
-  while (getc(ring, &rcv)) {
-    (void)putc(ring, rcv);  // misra-c2012-17.7: cast to void is ok: debug function
+  while (get_char(ring, &rcv)) {
+    (void)put_char(ring, rcv);  // misra-c2012-17.7: cast to void is ok: debug function
 
     // only allow bootloader entry on debug builds
     #ifdef ALLOW_DEBUG
@@ -69,36 +67,35 @@ void set_safety_mode(uint16_t mode, uint16_t param) {
     print("Error: safety set mode failed. Falling back to SILENT\n");
     mode_copy = SAFETY_SILENT;
     err = set_safety_hooks(mode_copy, 0U);
-    if (err == -1) {
-      print("Error: Failed setting SILENT mode. Hanging\n");
-      while (true) {
-        // TERMINAL ERROR: we can't continue if SILENT safety mode isn't succesfully set
-      }
-    }
+    // TERMINAL ERROR: we can't continue if SILENT safety mode isn't succesfully set
+    assert_fatal(err == 0, "Error: Failed setting SILENT mode. Hanging\n");
   }
   safety_tx_blocked = 0;
   safety_rx_invalid = 0;
 
   switch (mode_copy) {
     case SAFETY_SILENT:
-      set_intercept_relay(false);
+      set_intercept_relay(false, false);
       if (current_board->has_obd) {
         current_board->set_can_mode(CAN_MODE_NORMAL);
       }
       can_silent = ALL_CAN_SILENT;
       break;
     case SAFETY_NOOUTPUT:
-      set_intercept_relay(false);
+      set_intercept_relay(false, false);
       if (current_board->has_obd) {
         current_board->set_can_mode(CAN_MODE_NORMAL);
       }
       can_silent = ALL_CAN_LIVE;
       break;
     case SAFETY_ELM327:
-      set_intercept_relay(false);
+      set_intercept_relay(false, false);
       heartbeat_counter = 0U;
       heartbeat_lost = false;
       if (current_board->has_obd) {
+        // Clear any pending messages in the can core (i.e. sending while comma power is unplugged)
+        // TODO: rewrite using hardware queues rather than fifo to cancel specific messages
+        can_clear_send(CANIF_FROM_CAN_NUM(1), 1);
         if (param == 0U) {
           current_board->set_can_mode(CAN_MODE_OBD_CAN2);
         } else {
@@ -108,7 +105,7 @@ void set_safety_mode(uint16_t mode, uint16_t param) {
       can_silent = ALL_CAN_LIVE;
       break;
     default:
-      set_intercept_relay(true);
+      set_intercept_relay(true, false);
       heartbeat_counter = 0U;
       heartbeat_lost = false;
       if (current_board->has_obd) {
@@ -130,11 +127,12 @@ bool is_car_safety_mode(uint16_t mode) {
 // ***************************** main code *****************************
 
 // cppcheck-suppress unusedFunction ; used in headers not included in cppcheck
+// cppcheck-suppress misra-c2012-8.4
 void __initialize_hardware_early(void) {
   early_initialization();
 }
 
-void __attribute__ ((noinline)) enable_fpu(void) {
+static void __attribute__ ((noinline)) enable_fpu(void) {
   // enable the FPU
   SCB->CPACR |= ((3UL << (10U * 2U)) | (3UL << (11U * 2U)));
 }
@@ -144,17 +142,33 @@ void __attribute__ ((noinline)) enable_fpu(void) {
 #define HEARTBEAT_IGNITION_CNT_OFF 2U
 
 // called at 8Hz
-uint8_t loop_counter = 0U;
-uint8_t previous_harness_status = HARNESS_STATUS_NC;
-void tick_handler(void) {
-  if (TICK_TIMER->SR != 0) {
+static void tick_handler(void) {
+  static uint32_t siren_countdown = 0; // siren plays while countdown > 0
+  static uint32_t controls_allowed_countdown = 0;
+  static uint8_t prev_harness_status = HARNESS_STATUS_NC;
+  static uint8_t loop_counter = 0U;
+
+  if (TICK_TIMER->SR != 0U) {
+
     // siren
     current_board->set_siren((loop_counter & 1U) && (siren_enabled || (siren_countdown > 0U)));
 
     // tick drivers at 8Hz
     fan_tick();
     usb_tick();
+    harness_tick();
     simple_watchdog_kick();
+
+    // re-init everything that uses harness status
+    if (harness.status != prev_harness_status) {
+      prev_harness_status = harness.status;
+      can_set_orientation(harness.status == HARNESS_STATUS_FLIPPED);
+
+      // re-init everything that uses harness status
+      can_init_all();
+      set_safety_mode(current_safety_mode, current_safety_param);
+      set_power_save_state(power_save_status);
+    }
 
     // decimated to 1Hz
     if (loop_counter == 0U) {
@@ -181,16 +195,13 @@ void tick_handler(void) {
       // unless we are in power saving mode
       current_board->set_led(LED_BLUE, (uptime_cnt & 1U) && (power_save_status == POWER_SAVE_STATUS_ENABLED));
 
-      // tick drivers at 1Hz
-      harness_tick();
-      logging_tick();
-
       const bool recent_heartbeat = heartbeat_counter == 0U;
-      current_board->board_tick(check_started(), usb_enumerated, recent_heartbeat, ((harness.status != previous_harness_status) && (harness.status != HARNESS_STATUS_NC)));
-      previous_harness_status = harness.status;
+
+      // tick drivers at 1Hz
+      bootkick_tick(check_started(), recent_heartbeat);
 
       // increase heartbeat counter and cap it at the uint32 limit
-      if (heartbeat_counter < __UINT32_MAX__) {
+      if (heartbeat_counter < UINT32_MAX) {
         heartbeat_counter += 1U;
       }
 
@@ -215,7 +226,7 @@ void tick_handler(void) {
       if (controls_allowed && !heartbeat_engaged) {
         heartbeat_engaged_mismatches += 1U;
         if (heartbeat_engaged_mismatches >= 3U) {
-          controls_allowed = 0U;
+          controls_allowed = false;
         }
       } else {
         heartbeat_engaged_mismatches = 0U;
@@ -252,14 +263,11 @@ void tick_handler(void) {
           // Also disable IR when the heartbeat goes missing
           current_board->set_ir_power(0U);
 
-          // TODO: need a SPI equivalent
-          // If enumerated but no heartbeat (phone up, boardd not running), or when the SOM GPIO is pulled high by the ABL,
-          // turn the fan on to cool the device
-          if(usb_enumerated || current_board->read_som_gpio()){
-            fan_set_power(50U);
-          } else {
-            fan_set_power(0U);
-          }
+          // Run fan when device is up, but not talking to us
+          // * bootloader enables the SOM GPIO on boot
+          // * fallback to USB enumerated where supported
+          bool enabled = usb_enumerated || current_board->read_som_gpio();
+          fan_set_power(enabled ? 50U : 0U);
         }
       }
 
@@ -277,7 +285,7 @@ void tick_handler(void) {
       ignition_can_cnt += 1U;
 
       // synchronous safety check
-      safety_tick(current_rx_checks);
+      safety_tick(&current_safety_config);
     }
 
     loop_counter++;
@@ -285,38 +293,6 @@ void tick_handler(void) {
   }
   TICK_TIMER->SR = 0;
 }
-
-void EXTI_IRQ_Handler(void) {
-  if (check_exti_irq()) {
-    exti_irq_clear();
-    clock_init();
-
-    set_power_save_state(POWER_SAVE_STATUS_DISABLED);
-    deepsleep_allowed = false;
-    heartbeat_counter = 0U;
-    usb_soft_disconnect(false);
-
-    NVIC_EnableIRQ(TICK_TIMER_IRQ);
-  }
-}
-
-uint8_t rtc_counter = 0;
-void RTC_WKUP_IRQ_Handler(void) {
-  exti_irq_clear();
-  clock_init();
-
-  rtc_counter++;
-  if ((rtc_counter % 2U) == 0U) {
-    current_board->set_led(LED_BLUE, false);
-  } else {
-    current_board->set_led(LED_BLUE, true);
-  }
-
-  if (rtc_counter == __UINT8_MAX__) {
-    rtc_counter = 1U;
-  }
-}
-
 
 int main(void) {
   // Init interrupt table
@@ -329,43 +305,25 @@ int main(void) {
   clock_init();
   peripherals_init();
   detect_board_type();
+  // red+green leds enabled until succesful USB/SPI init, as a debug indicator
+  current_board->set_led(LED_RED, true);
+  current_board->set_led(LED_GREEN, true);
   adc_init();
-  logging_init();
 
   // print hello
   print("\n\n\n************************ MAIN START ************************\n");
 
   // check for non-supported board types
-  if(hw_type == HW_TYPE_UNKNOWN){
-    print("Unsupported board type\n");
-    while (1) { /* hang */ }
-  }
+  assert_fatal(hw_type != HW_TYPE_UNKNOWN, "Unsupported board type");
 
   print("Config:\n");
-  print("  Board type: "); print(current_board->board_type); print("\n");
+  print("  Board type: 0x"); puth(hw_type); print("\n");
 
   // init board
   current_board->init();
 
   // panda has an FPU, let's use it!
   enable_fpu();
-
-  log("main start");
-
-  if (current_board->has_gps) {
-    uart_init(&uart_ring_gps, 9600);
-  } else {
-    // enable ESP uart
-    uart_init(&uart_ring_gps, 115200);
-  }
-
-  if (current_board->has_lin) {
-    // enable LIN
-    uart_init(&uart_ring_lin1, 10400);
-    UART5->CR2 |= USART_CR2_LINEN;
-    uart_init(&uart_ring_lin2, 10400);
-    USART3->CR2 |= USART_CR2_LINEN;
-  }
 
   if (current_board->fan_max_rpm > 0U) {
     fan_init();
@@ -398,13 +356,14 @@ int main(void) {
   }
 #endif
 
+  current_board->set_led(LED_RED, false);
+  current_board->set_led(LED_GREEN, false);
+
   print("**** INTERRUPTS ON ****\n");
   enable_interrupts();
 
   // LED should keep on blinking all the time
-  uint64_t cnt = 0;
-
-  for (cnt=0;;cnt++) {
+  while (true) {
     if (power_save_status == POWER_SAVE_STATUS_DISABLED) {
       #ifdef DEBUG_FAULTS
       if (fault_status == FAULT_STATUS_NONE) {
@@ -433,22 +392,6 @@ int main(void) {
         }
       #endif
     } else {
-      if (deepsleep_allowed && !usb_enumerated && !check_started() && ignition_seen && (heartbeat_counter > 20U)) {
-        usb_soft_disconnect(true);
-        fan_set_power(0U);
-        NVIC_DisableIRQ(TICK_TIMER_IRQ);
-        delay(512000U);
-
-        // Init IRQs for CAN transceiver and ignition line
-        exti_irq_init();
-
-        // Init RTC Wakeup event on EXTI22
-        REGISTER_INTERRUPT(RTC_WKUP_IRQn, RTC_WKUP_IRQ_Handler, 10U, FAULT_INTERRUPT_RATE_EXTI)
-        rtc_wakeup_init();
-
-        // STOP mode
-        SCB->SCR |= SCB_SCR_SLEEPDEEP_Msk;
-      }
       __WFI();
       SCB->SCR &= ~SCB_SCR_SLEEPDEEP_Msk;
     }
