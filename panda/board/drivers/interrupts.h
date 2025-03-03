@@ -1,4 +1,14 @@
-#include "interrupts_declarations.h"
+typedef struct interrupt {
+  IRQn_Type irq_type;
+  void (*handler)(void);
+  uint32_t call_counter;
+  uint32_t call_rate;
+  uint32_t max_call_rate;   // Call rate is defined as the amount of calls each second
+  uint32_t call_rate_fault;
+} interrupt;
+
+void interrupt_timer_init(void);
+uint32_t microsecond_timer_get(void);
 
 void unused_interrupt_handler(void) {
   // Something is wrong if this handler is called!
@@ -8,15 +18,23 @@ void unused_interrupt_handler(void) {
 
 interrupt interrupts[NUM_INTERRUPTS];
 
-static bool check_interrupt_rate = false;
+#define REGISTER_INTERRUPT(irq_num, func_ptr, call_rate_max, rate_fault) \
+  interrupts[irq_num].irq_type = (irq_num); \
+  interrupts[irq_num].handler = (func_ptr);  \
+  interrupts[irq_num].call_counter = 0U;   \
+  interrupts[irq_num].call_rate = 0U;   \
+  interrupts[irq_num].max_call_rate = (call_rate_max); \
+  interrupts[irq_num].call_rate_fault = (rate_fault);
 
-static uint32_t idle_time = 0U;
-static uint32_t busy_time = 0U;
+bool check_interrupt_rate = false;
+
+uint8_t interrupt_depth = 0U;
+uint32_t last_time = 0U;
+uint32_t idle_time = 0U;
+uint32_t busy_time = 0U;
 float interrupt_load = 0.0f;
 
 void handle_interrupt(IRQn_Type irq_type){
-  static uint8_t interrupt_depth = 0U;
-  static uint32_t last_time = 0U;
   ENTER_CRITICAL();
   if (interrupt_depth == 0U) {
     uint32_t time = microsecond_timer_get();
@@ -46,7 +64,7 @@ void handle_interrupt(IRQn_Type irq_type){
 
 // Every second
 void interrupt_timer_handler(void) {
-  if (INTERRUPT_TIMER->SR != 0U) {
+  if (INTERRUPT_TIMER->SR != 0) {
     for (uint16_t i = 0U; i < NUM_INTERRUPTS; i++) {
       // Log IRQ call rate faults
       if (check_interrupt_rate && (interrupts[i].call_counter > interrupts[i].max_call_rate)) {
@@ -60,8 +78,8 @@ void interrupt_timer_handler(void) {
 
     // Calculate interrupt load
     // The bootstub does not have the FPU enabled, so can't do float operations.
-#if !defined(BOOTSTUB)
-    interrupt_load = ((busy_time + idle_time) > 0U) ? ((float) (((float) busy_time) / (busy_time + idle_time))) : 0.0f;
+#if !defined(PEDAL) && !defined(BOOTSTUB)
+    interrupt_load = ((busy_time + idle_time) > 0U) ? ((float) busy_time) / (busy_time + idle_time) : 0.0f;
 #endif
     idle_time = 0U;
     busy_time = 0U;

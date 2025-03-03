@@ -1,35 +1,41 @@
-import os
-import pytest
 import concurrent.futures
+import os
+import time
+import pytest
 
-from panda import Panda, PandaDFU, PandaJungle
+from panda import Panda, PandaDFU
 from panda.tests.hitl.helpers import clear_can_buffers
 
-# needed to get output when using xdist
-if "DEBUG" in os.environ:
-  import sys
-  sys.stdout = sys.stderr
+NO_JUNGLE = os.environ.get("NO_JUNGLE", "0") == "1"
+if not NO_JUNGLE:
+  from panda_jungle import PandaJungle  # pylint: disable=import-error
+
 
 SPEED_NORMAL = 500
-BUS_SPEEDS = [(0, SPEED_NORMAL), (1, SPEED_NORMAL), (2, SPEED_NORMAL)]
+SPEED_GMLAN = 33.3
+BUS_SPEEDS = [(0, SPEED_NORMAL), (1, SPEED_NORMAL), (2, SPEED_NORMAL), (3, SPEED_GMLAN)]
 
 
+PEDAL_SERIAL = 'none'
 JUNGLE_SERIAL = os.getenv("PANDAS_JUNGLE")
-NO_JUNGLE = os.environ.get("NO_JUNGLE", "0") == "1"
 PANDAS_EXCLUDE = os.getenv("PANDAS_EXCLUDE", "").strip().split(" ")
+PARTIAL_TESTS = os.environ.get("PARTIAL_TESTS", "0") == "1"
 HW_TYPES = os.environ.get("HW_TYPES", None)
-
-PARALLEL = "PARALLEL" in os.environ
-NON_PARALLEL = "NON_PARALLEL" in os.environ
-if PARALLEL:
-  NO_JUNGLE = True
 
 class PandaGroup:
   H7 = (Panda.HW_TYPE_RED_PANDA, Panda.HW_TYPE_RED_PANDA_V2, Panda.HW_TYPE_TRES)
   GEN2 = (Panda.HW_TYPE_BLACK_PANDA, Panda.HW_TYPE_UNO, Panda.HW_TYPE_DOS) + H7
+  GPS = (Panda.HW_TYPE_BLACK_PANDA, Panda.HW_TYPE_UNO)
+  GMLAN = (Panda.HW_TYPE_WHITE_PANDA, Panda.HW_TYPE_GREY_PANDA)
+
   TESTED = (Panda.HW_TYPE_WHITE_PANDA, Panda.HW_TYPE_BLACK_PANDA, Panda.HW_TYPE_RED_PANDA, Panda.HW_TYPE_RED_PANDA_V2, Panda.HW_TYPE_UNO)
 
-if HW_TYPES is not None:
+if PARTIAL_TESTS:
+  # minimal set of pandas to get most of our coverage
+  # * red panda covers GEN2, STM32H7
+  # * black panda covers STM32F4, GEN2, and GPS
+  PandaGroup.TESTED = (Panda.HW_TYPE_BLACK_PANDA, Panda.HW_TYPE_RED_PANDA)  # type: ignore
+elif HW_TYPES is not None:
   PandaGroup.TESTED = [bytes([int(x), ]) for x in HW_TYPES.strip().split(",")] # type: ignore
 
 
@@ -43,8 +49,8 @@ def init_all_pandas():
     _panda_jungle.set_panda_power(True)
 
   for serial in Panda.list():
-    if serial not in PANDAS_EXCLUDE:
-      with Panda(serial=serial, claim=False) as p:
+    if serial not in PANDAS_EXCLUDE and serial != PEDAL_SERIAL:
+      with Panda(serial=serial) as p:
         ptype = bytes(p.get_type())
         if ptype in PandaGroup.TESTED:
           _all_pandas[serial] = ptype
@@ -55,12 +61,13 @@ def init_all_pandas():
 
   print(f"{len(_all_pandas)} total pandas")
 init_all_pandas()
-_all_panda_serials = sorted(_all_pandas.keys())
+_all_panda_serials = list(_all_pandas.keys())
 
 
 def init_jungle():
   if _panda_jungle is None:
     return
+  _panda_jungle.reset()
   clear_can_buffers(_panda_jungle)
   _panda_jungle.set_panda_power(True)
   _panda_jungle.set_can_loopback(False)
@@ -68,9 +75,6 @@ def init_jungle():
   _panda_jungle.set_harness_orientation(PandaJungle.HARNESS_ORIENTATION_1)
   for bus, speed in BUS_SPEEDS:
     _panda_jungle.set_can_speed_kbps(bus, speed)
-
-  # ensure FW hasn't changed
-  assert _panda_jungle.up_to_date()
 
 
 def pytest_configure(config):
@@ -83,23 +87,18 @@ def pytest_configure(config):
   config.addinivalue_line(
     "markers", "panda_expect_can_error: mark test to ignore CAN health errors"
   )
+  config.addinivalue_line(
+    "markers", "expected_logs(amount, ...): mark test to expect a certain amount of panda logs"
+  )
 
-@pytest.hookimpl(tryfirst=True)
 def pytest_collection_modifyitems(items):
   for item in items:
-    if item.get_closest_marker('timeout') is None:
-      item.add_marker(pytest.mark.timeout(60))
+    if item.get_closest_marker('execution_timeout') is None:
+      item.add_marker(pytest.mark.execution_timeout(10))
 
-    # xdist grouping by panda
-    serial = item.name.split("serial=")[1].split(",")[0]
-    assert len(serial) == 24
-    item.add_marker(pytest.mark.xdist_group(serial))
+    item.add_marker(pytest.mark.setup_timeout(20))
+    item.add_marker(pytest.mark.teardown_timeout(20))
 
-    needs_jungle = "panda_jungle" in item.fixturenames
-    if PARALLEL and needs_jungle:
-      item.add_marker(pytest.mark.skip(reason="no jungle tests in PARALLEL mode"))
-    elif NON_PARALLEL and not needs_jungle:
-      item.add_marker(pytest.mark.skip(reason="only running jungle tests"))
 
 def pytest_make_parametrize_id(config, val, argname):
   if val in _all_pandas:
@@ -109,12 +108,12 @@ def pytest_make_parametrize_id(config, val, argname):
   return None
 
 
-@pytest.fixture(name='panda_jungle', scope='function')
+@pytest.fixture(name='panda_jungle')
 def fixture_panda_jungle(request):
   init_jungle()
   return _panda_jungle
 
-@pytest.fixture(name='p', scope='function')
+@pytest.fixture(name='p')
 def func_fixture_panda(request, module_panda):
   p = module_panda
 
@@ -133,9 +132,10 @@ def func_fixture_panda(request, module_panda):
     if _all_pandas[p.get_usb_serial()] in skip_types:
       pytest.skip(f"Not applicable to {skip_types}")
 
-  # this is 2+ seconds on USB pandas due to slow
-  # enumeration on the host side
+  # TODO: reset is slow (2+ seconds)
   p.reset()
+  logs = p.get_logs()
+  last_log_id = logs[-1]['id'] if len(logs) > 0 else 0
 
   # ensure FW hasn't changed
   assert p.up_to_date()
@@ -163,6 +163,20 @@ def func_fixture_panda(request, module_panda):
   assert p.health()['faults'] == 0
   assert p.health()['fault_status'] == 0
 
+  # Make sure that there are no unexpected logs
+  min_expected_logs = 0
+  max_expected_logs = 0
+  mark = request.node.get_closest_marker('expected_logs')
+  if mark:
+    assert len(mark.args) > 0, "Missing expected logs argument in mark"
+    min_expected_logs = mark.args[0]
+    max_expected_logs = mark.args[1] if len(mark.args) > 1 else min_expected_logs
+
+  logs.extend(p.get_logs(True))
+  log_id = logs[-1]['id'] if len(logs) > 0 else last_log_id
+
+  assert min_expected_logs <= ((log_id - last_log_id) % 0xFFFE) <= max_expected_logs, f"Unexpected amount of logs. Last 5: {logs[-5:]}"
+
   # Check for SPI errors
   #assert p.health()['spi_checksum_error_count'] == 0
 
@@ -173,10 +187,8 @@ def func_fixture_panda(request, module_panda):
     for i in range(3):
       can_health = p.can_health(i)
       assert can_health['bus_off_cnt'] == 0
-      assert can_health['receive_error_cnt'] < 127
-      assert can_health['transmit_error_cnt'] < 255
-      assert can_health['error_passive'] == 0
-      assert can_health['error_warning'] == 0
+      assert can_health['receive_error_cnt'] == 0
+      assert can_health['transmit_error_cnt'] == 0
       assert can_health['total_rx_lost_cnt'] == 0
       assert can_health['total_tx_lost_cnt'] == 0
       assert can_health['total_error_cnt'] == 0
@@ -192,6 +204,12 @@ def fixture_panda_setup(request):
   # Initialize jungle
   init_jungle()
 
+  # wait for all pandas to come up
+  for _ in range(50):
+    if set(_all_panda_serials).issubset(set(Panda.list())):
+      break
+    time.sleep(0.1)
+
   # Connect to pandas
   def cnnct(s):
     if s == panda_serial:
@@ -199,13 +217,15 @@ def fixture_panda_setup(request):
       p.reset(reconnect=True)
 
       p.set_can_loopback(False)
+      p.set_gmlan(None)
+      p.set_esp_power(False)
       p.set_power_save(False)
       for bus, speed in BUS_SPEEDS:
         p.set_can_speed_kbps(bus, speed)
       clear_can_buffers(p)
       p.set_power_save(False)
       return p
-    elif not PARALLEL:
+    else:
       with Panda(serial=s) as p:
         p.reset(reconnect=False)
     return None

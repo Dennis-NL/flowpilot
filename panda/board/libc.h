@@ -5,17 +5,6 @@ void delay(uint32_t a) {
   for (i = 0; i < a; i++);
 }
 
-void assert_fatal(bool condition, const char *msg) {
-  if (!condition) {
-    print("ASSERT FAILED\n");
-    print(msg);
-    while (1) {
-      // hang
-    }
-  }
-}
-
-// cppcheck-suppress misra-c2012-21.2
 void *memset(void *str, int c, unsigned int n) {
   uint8_t *s = str;
   for (unsigned int i = 0; i < n; i++) {
@@ -28,7 +17,6 @@ void *memset(void *str, int c, unsigned int n) {
 #define UNALIGNED(X, Y) \
   (((uint32_t)(X) & (sizeof(uint32_t) - 1U)) | ((uint32_t)(Y) & (sizeof(uint32_t) - 1U)))
 
-// cppcheck-suppress misra-c2012-21.2
 void *memcpy(void *dest, const void *src, unsigned int len) {
   unsigned int n = len;
   uint8_t *d8 = dest;
@@ -60,7 +48,6 @@ void *memcpy(void *dest, const void *src, unsigned int len) {
   return dest;
 }
 
-// cppcheck-suppress misra-c2012-21.2
 int memcmp(const void * ptr1, const void * ptr2, unsigned int num) {
   int ret = 0;
   const uint8_t *p1 = ptr1;

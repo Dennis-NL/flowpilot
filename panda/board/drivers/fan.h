@@ -1,9 +1,21 @@
-#include "fan_declarations.h"
-
+struct fan_state_t {
+  uint16_t tach_counter;
+  uint16_t rpm;
+  uint16_t target_rpm;
+  uint8_t power;
+  float error_integral;
+  uint8_t stall_counter;
+  uint8_t stall_threshold;
+  uint8_t total_stall_count;
+  uint8_t cooldown_counter;
+} fan_state_t;
 struct fan_state_t fan_state;
 
-static const uint8_t FAN_TICK_FREQ = 8U;
-static const uint8_t FAN_STALL_THRESHOLD_MIN = 3U;
+const float FAN_I = 0.001f;
+
+const uint8_t FAN_TICK_FREQ = 8U;
+const uint8_t FAN_STALL_THRESHOLD_MIN = 3U;
+const uint8_t FAN_STALL_THRESHOLD_MAX = 8U;
 
 
 void fan_set_power(uint8_t percentage) {
@@ -19,9 +31,6 @@ void fan_init(void) {
 
 // Call this at FAN_TICK_FREQ
 void fan_tick(void) {
-  const float FAN_I = 0.001f;
-  const uint8_t FAN_STALL_THRESHOLD_MAX = 8U;
-
   if (current_board->fan_max_rpm > 0U) {
     // Measure fan RPM
     uint16_t fan_rpm_fast = fan_state.tach_counter * (60U * FAN_TICK_FREQ / 4U);   // 4 interrupts per rotation
@@ -77,7 +86,7 @@ void fan_tick(void) {
       float error = fan_state.target_rpm - fan_rpm_fast;
       fan_state.error_integral += FAN_I * error;
     }
-    fan_state.power = CLAMP(fan_state.error_integral, 0U, current_board->fan_max_pwm);
+    fan_state.power = CLAMP(fan_state.error_integral, 0U, 100U);
 
     // Set PWM and enable line
     pwm_set(TIM3, 3, fan_state.power);

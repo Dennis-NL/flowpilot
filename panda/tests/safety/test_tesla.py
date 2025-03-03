@@ -20,9 +20,10 @@ class CONTROL_LEVER_STATE:
   IDLE = 0
 
 
-class TestTeslaSafety(common.PandaCarSafetyTest):
+class TestTeslaSafety(common.PandaSafetyTest):
   STANDSTILL_THRESHOLD = 0
   GAS_PRESSED_THRESHOLD = 3
+  RELAY_MALFUNCTION_BUS = 0
   FWD_BUS_LOOKUP = {0: 2, 2: 0}
 
   def setUp(self):
@@ -64,7 +65,7 @@ class TestTeslaSafety(common.PandaCarSafetyTest):
 
 class TestTeslaSteeringSafety(TestTeslaSafety, common.AngleSteeringSafetyTest):
   TX_MSGS = [[0x488, 0], [0x45, 0], [0x45, 2]]
-  RELAY_MALFUNCTION_ADDRS = {0: (0x488,)}
+  RELAY_MALFUNCTION_ADDR = 0x488
   FWD_BLACKLISTED_ADDRS = {2: [0x488]}
 
   # Angle control limits
@@ -108,17 +109,6 @@ class TestTeslaSteeringSafety(TestTeslaSafety, common.AngleSteeringSafetyTest):
         self.assertEqual(tx, should_tx)
 
 
-class TestTeslaRavenSteeringSafety(TestTeslaSteeringSafety):
-  def setUp(self):
-    self.packer = CANPackerPanda("tesla_can")
-    self.safety = libpanda_py.libpanda
-    self.safety.set_safety_hooks(Panda.SAFETY_TESLA, Panda.FLAG_TESLA_RAVEN)
-    self.safety.init_tests()
-
-  def _angle_meas_msg(self, angle: float):
-    values = {"EPAS_internalSAS": angle}
-    return self.packer.make_can_msg_panda("EPAS3P_sysStatus", 2, values)
-
 class TestTeslaLongitudinalSafety(TestTeslaSafety):
   def setUp(self):
     raise unittest.SkipTest
@@ -159,7 +149,7 @@ class TestTeslaLongitudinalSafety(TestTeslaSafety):
 
 class TestTeslaChassisLongitudinalSafety(TestTeslaLongitudinalSafety):
   TX_MSGS = [[0x488, 0], [0x45, 0], [0x45, 2], [0x2B9, 0]]
-  RELAY_MALFUNCTION_ADDRS = {0: (0x488,)}
+  RELAY_MALFUNCTION_ADDR = 0x488
   FWD_BLACKLISTED_ADDRS = {2: [0x2B9, 0x488]}
 
   def setUp(self):
@@ -171,7 +161,7 @@ class TestTeslaChassisLongitudinalSafety(TestTeslaLongitudinalSafety):
 
 class TestTeslaPTLongitudinalSafety(TestTeslaLongitudinalSafety):
   TX_MSGS = [[0x2BF, 0]]
-  RELAY_MALFUNCTION_ADDRS = {0: (0x2BF,)}
+  RELAY_MALFUNCTION_ADDR = 0x2BF
   FWD_BLACKLISTED_ADDRS = {2: [0x2BF]}
 
   def setUp(self):
