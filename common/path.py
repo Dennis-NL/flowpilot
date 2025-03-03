@@ -7,6 +7,6 @@ def internal(path):
     return os.path.join(flowpilot_root(), path)
 
 def external_android_storage():
-    return "/sdcard"
+    return "/storage/emulated/0/flowpilot"
 
 BASEDIR = flowpilot_root()

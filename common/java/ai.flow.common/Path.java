@@ -26,7 +26,7 @@ public class Path {
 
     public static String getFlowdriveDir(){
         if (SystemUtils.isAndroid())
-            return "/sdcard/flowpilot/.flowdrive";
+            return "/storage/emulated/0/flowpilot/flowpilot/.flowdrive";
         return System.getenv("HOME") + "/.flowdrive";
     }
 
