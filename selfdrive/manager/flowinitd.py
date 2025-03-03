@@ -52,6 +52,9 @@ def flowpilot_running():
 
 
 def append_extras(command: str):
+    fingerprint_value = "AUDI A4 4TH GEN"
+    command += f" -e 'FINGERPRINT' '{fingerprint_value}'"
+    
     for var in ENV_VARS:
         val = os.environ.get(var, None)
         if val is not None:
