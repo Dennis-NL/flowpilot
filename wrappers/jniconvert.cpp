@@ -91,7 +91,8 @@ auto p_clSetKernelArg = reinterpret_cast<clSetKernelArg_t>(dlsym(opencl_library,
 // cl_context context = (*p_clCreateContext)(NULL, 1, &device_id, NULL, NULL, &err);
 
 #undef assert
-#define assert(x) ((x) ? __assert_no_op : (void)__android_log_print(ANDROID_LOG_ERROR, "ASSERT", "Assert failed: %s", #x))
+#define assert(x) \
+    ((x) ? __assert_no_op : (void)__android_log_print(ANDROID_LOG_ERROR, "ASSERT", "Assert failed: %s, file: %s, line: %d", #x, __FILE__, __LINE__))
 
 void hexdump(uint8_t *d, int len) {
     assert((len%4) == 0);
