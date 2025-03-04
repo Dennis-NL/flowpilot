@@ -15,8 +15,12 @@ import ai.flow.openpilot.ServiceThermald;
 import android.Manifest;
 import android.content.Intent;
 import android.content.pm.PackageManager;
+import android.net.Uri;
+import android.os.Build;
 import android.os.Bundle;
+import android.os.Environment;
 import android.os.StrictMode;
+import android.provider.Settings;
 import android.view.Window;
 import android.view.WindowManager;
 import android.widget.ImageView;
@@ -25,23 +29,29 @@ import androidx.appcompat.app.AppCompatActivity;
 import androidx.core.app.ActivityCompat;
 import androidx.core.content.ContextCompat;
 
+import com.badlogic.gdx.Gdx;
 import com.bumptech.glide.Glide;
 
+import java.io.File;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 
+import ai.flow.flowy.PythonRunner;
+
+import static android.os.Build.VERSION.SDK_INT;
+
+import org.kivy.android.PythonUtil;
+
 public class LoadingActivity extends AppCompatActivity {
 
-    List<String> requiredPermissions = Arrays.asList(
-            Manifest.permission.CAMERA,
-            Manifest.permission.READ_MEDIA_IMAGES,
-            Manifest.permission.READ_MEDIA_VIDEO,
-            Manifest.permission.READ_MEDIA_AUDIO,
-            Manifest.permission.MANAGE_EXTERNAL_STORAGE,
+    List<String> requiredPermissions = Arrays.asList(Manifest.permission.CAMERA,
+            //Manifest.permission.WRITE_EXTERNAL_STORAGE, // unused on android 13+
+            //Manifest.permission.READ_EXTERNAL_STORAGE, // unused on android 13+
+//            Manifest.permission.RECORD_AUDIO,
+//            Manifest.permission.READ_PHONE_STATE,
             Manifest.permission.WAKE_LOCK,
-            Manifest.permission.VIBRATE
-    );
+            Manifest.permission.VIBRATE);
 
     public boolean bootComplete = false;
 
@@ -66,7 +76,7 @@ public class LoadingActivity extends AppCompatActivity {
     }
 
     private boolean checkPermissions() {
-        for (String permission : requiredPermissions) {
+        for (String permission: requiredPermissions){
             if (ContextCompat.checkSelfPermission(this, permission) != PackageManager.PERMISSION_GRANTED) {
                 return false;
             }
@@ -74,19 +84,18 @@ public class LoadingActivity extends AppCompatActivity {
         return true;
     }
 
-    private void ensureBoot() {
+    private void ensureBoot(){
         new Thread(new Runnable() {
             public void run() {
                 // request permissions and wait till granted.
                 requestPermissions();
                 int i = 0;
-                while (!checkPermissions()) {
+                while (!checkPermissions()){
                     // show toast every 4 seconds
-                    if (i % 40 == 0) {
+                    if (i%40 == 0) {
                         try {
                             Toast.makeText(getApplicationContext(), "Flowpilot needs all required permissions to be granted to work.", Toast.LENGTH_LONG).show();
-                        } catch (Exception e) {
-                        }
+                        } catch (Exception e) { }
                     }
                     try {
                         Thread.sleep(100);
@@ -118,12 +127,13 @@ public class LoadingActivity extends AppCompatActivity {
                 ServiceRadard.start(getApplication().getApplicationContext(), "");
                 ServiceCalibrationd.prepare(getApplication().getApplicationContext());
                 ServiceCalibrationd.start(getApplication().getApplicationContext(), "");
+                ServicePlannerd.prepare(getApplication().getApplicationContext());
+                ServicePlannerd.start(getApplication().getApplicationContext(), "");
 
                 try {
                     ParamsInterface params = ParamsInterface.getInstance();
                     params.blockTillExists("F3");
-                } catch (InterruptedException ignored) {
-                }
+                } catch (InterruptedException ignored) {}
                 bootComplete = true;
 
                 Intent intent = new Intent(getApplicationContext(), AndroidLauncher.class);
@@ -137,14 +147,12 @@ public class LoadingActivity extends AppCompatActivity {
 
     private void requestPermissions() {
         List<String> requestPermissions = new ArrayList<>();
-        for (String permission : requiredPermissions) {
-            if (ContextCompat.checkSelfPermission(this, permission) != PackageManager.PERMISSION_GRANTED) {
+        for (String permission: requiredPermissions){
+            if (ContextCompat.checkSelfPermission(this, permission) != PackageManager.PERMISSION_GRANTED)
                 requestPermissions.add(permission);
-            }
         }
-        if (!requestPermissions.isEmpty()) {
+        if (!requestPermissions.isEmpty())
             ActivityCompat.requestPermissions(this, requestPermissions.toArray(new String[0]), 1);
-        }
     }
 
     @Override
