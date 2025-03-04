@@ -45,14 +45,13 @@ import org.kivy.android.PythonUtil;
 
 public class LoadingActivity extends AppCompatActivity {
 
-    List<String> requiredPermissions = Arrays.asList(
-            Manifest.permission.CAMERA,
+    List<String> requiredPermissions = Arrays.asList(Manifest.permission.CAMERA,
+            //Manifest.permission.WRITE_EXTERNAL_STORAGE, // unused on android 13+
+            //Manifest.permission.READ_EXTERNAL_STORAGE, // unused on android 13+
+//            Manifest.permission.RECORD_AUDIO,
+//            Manifest.permission.READ_PHONE_STATE,
             Manifest.permission.WAKE_LOCK,
-            Manifest.permission.VIBRATE,
-            Manifest.permission.READ_EXTERNAL_STORAGE,
-            Manifest.permission.WRITE_EXTERNAL_STORAGE,
-            Manifest.permission.MANAGE_EXTERNAL_STORAGE 
-    );
+            Manifest.permission.VIBRATE);
 
     public boolean bootComplete = false;
 
