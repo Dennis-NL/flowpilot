@@ -21,7 +21,7 @@ def get_installed_apks():
 
 def install_apk(path):
   # can only install from world readable path
-  install_path = "/sdcard/%s" % os.path.basename(path)
+  install_path = "/mnt/media_rw/9A49-5E41/%s" % os.path.basename(path)
   shutil.copyfile(path, install_path)
 
   ret = subprocess.call(["pm", "install", "-r", install_path])
