@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Openpilot</string>
+    <string name="private_version">a5d1be5b7cdd349e45a621f955bdc05a5093b42b</string>
+</resources>
