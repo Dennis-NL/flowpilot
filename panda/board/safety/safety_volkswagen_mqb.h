@@ -1,6 +1,3 @@
-#pragma once
-
-#include "safety_declarations.h"
 #include "safety_volkswagen_common.h"
 
 // lateral limits

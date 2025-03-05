@@ -18,19 +18,20 @@ MSG_HCA_01 = 0x126      # TX by OP, Heading Control Assist steering torque
 MSG_LDW_02 = 0x397      # TX by OP, Lane line recognition and text alerts
 
 
-class TestVolkswagenMlbSafety(common.PandaSafetyTest, common.DriverTorqueSteeringSafetyTest):
+class TestVolkswagenMlbSafety(common.PandaCarSafetyTest, common.DriverTorqueSteeringSafetyTest):
   STANDSTILL_THRESHOLD = 0
-  RELAY_MALFUNCTION_ADDR = MSG_HCA_01
-  RELAY_MALFUNCTION_BUS = 0
+  RELAY_MALFUNCTION_ADDRS = {0: (MSG_HCA_01,)}
 
-  MAX_RATE_UP = 4
+  MAX_RATE_UP = 10
   MAX_RATE_DOWN = 10
   MAX_TORQUE = 300
-  MAX_RT_DELTA = 75
+  MAX_RT_DELTA = 188
   RT_INTERVAL = 250000
 
-  DRIVER_TORQUE_ALLOWANCE = 80
+  DRIVER_TORQUE_ALLOWANCE = 60
   DRIVER_TORQUE_FACTOR = 3
+
+  NO_STEER_REQ_BIT = True  # FIXME: check to see if this is correct
 
   @classmethod
   def setUpClass(cls):
@@ -65,9 +66,8 @@ class TestVolkswagenMlbSafety(common.PandaSafetyTest, common.DriverTorqueSteerin
 
   # ACC engagement status
   def _tsk_status_msg(self, enable, main_switch=True):
-    # TODO: implement main switch detection
-    values = {"TSK_Status": 1 if enable else 0}
-    return self.packer.make_can_msg_panda("TSK_02", 0, values)
+    values = {"ACC_Status_ACC": 1 if not main_switch else 3 if enable else 2}
+    return self.packer.make_can_msg_panda("ACC_05", 2, values)
 
   def _pcm_status_msg(self, enable):
     return self._tsk_status_msg(enable)
@@ -79,7 +79,7 @@ class TestVolkswagenMlbSafety(common.PandaSafetyTest, common.DriverTorqueSteerin
 
   # openpilot steering output torque
   def _torque_cmd_msg(self, torque, steer_req=1):
-    values = {"Assist_Torque": abs(torque), "Assist_VZ": torque < 0}
+    values = {"HCA_01_LM_Offset": abs(torque), "HCA_01_LM_OffSign": torque < 0, "HCA_01_Sendestatus": steer_req}
     return self.packer.make_can_msg_panda("HCA_01", 0, values)
 
   # Cruise control buttons
@@ -139,6 +139,13 @@ class TestVolkswagenMlbStockSafety(TestVolkswagenMlbSafety):
     # do not block resume if we are engaged already
     self.safety.set_controls_allowed(1)
     self.assertTrue(self._tx(self._ls_01_msg(resume=1)))
+
+  def test_cancel_button(self):
+    # Disable on rising edge of cancel button
+    self._rx(self._tsk_status_msg(False, main_switch=True))
+    self.safety.set_controls_allowed(1)
+    self._rx(self._ls_01_msg(cancel=True, bus=0))
+    self.assertFalse(self.safety.get_controls_allowed(), "controls allowed after cancel")
 
 
 if __name__ == "__main__":
